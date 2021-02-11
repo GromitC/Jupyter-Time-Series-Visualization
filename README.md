@@ -94,3 +94,6 @@ vis.fit(
     labels=labels
 )
 ```
+
+## Contact
+For more questions or feature requests, feel free to reach me (Gromit Chan) through my [e-mail](mailto:gromit.chan@nyu.edu?subject=[TSVis]%20Source%20Han%20Sans).
