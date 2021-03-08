@@ -13,6 +13,7 @@ from .util import *
 from .geometry import polygon2mesh
 from tqdm.notebook import tqdm
 from collections import defaultdict
+import time
 
 '''
 todos:
@@ -68,7 +69,7 @@ class CustomPanZoomCamera(PanZoomCamera):
 
 class TimeSeriesVis():
     
-    def __init__(self,x_domain = None,chart_width=300,chart_height=150,padding=50,n_cols=3,n_ticks=5,interpolate=200,verbose=0):
+    def __init__(self,x_domain = None,chart_width=300,chart_height=150,padding=50,n_cols=3,n_ticks=5,interpolate=200,min_size=10,verbose=0):
         self.chart_width = chart_width
         self.chart_height = chart_height
         self.padding = padding
@@ -81,7 +82,9 @@ class TimeSeriesVis():
         self.interpolate = interpolate
         self.line_central = [] 
         self.area = []
+        self.min_size = min_size
         self.verbose = verbose
+        self.time_profile = {}
         
     def fit(self,data,labels=None,labels_order=None,central_line=None,area=False):
         if labels is None:
@@ -95,27 +98,72 @@ class TimeSeriesVis():
         self.size_threshold = 0
         self.data = [np.array(d) for d in data]
         self.interval_threshold = [0,self.data[0].shape[1]]
-        self.data,labels,central_line = self.make_canvas_spec(self.data,labels,labels_order,central_line)
+        self.buffers = {'group':None,'all':None}
+        list_idx = list(range(len(self.data)))
+        if labels is None or (type(labels[0]) is not list and not isinstance(labels[0], np.ndarray)):
+            self.data,idx,labels,central_line = self.make_canvas_spec(self.data,list_idx,labels,labels_order,central_line)
+            self.buffers['all'] = self.prepare_buffers(self.data,idx,central_line)
+            self.labels = labels
+        else:
+            data_grouped, labels_grouped, central_line_grouped,idx = self.separateData(self.data,labels,central_line)
+            data_grouped,idx,labels_grouped,central_line_grouped = self.make_canvas_spec(data_grouped,idx,labels_grouped,labels_order,central_line_grouped)
+            self.buffers['group'] = self.prepare_buffers(data_grouped,idx,central_line_grouped)
+            self.labels = labels_grouped
+            self.buffers['all'] = self.prepare_buffers(self.data,list_idx,central_line)
+
         self.central_line = central_line
-        self.labels = labels
-        # self.init_canvas()
-        self.prepare_buffers(central_line)
-        # self.paint()
         
+    def separateData(self,data,labels,center_line=None):
+        data_group = []
+        labels_group = []
+        center_lines = []
+        list_idx = []
+        if center_line is None:
+            iterator = zip(data,labels)
+            center_lines = None
+        else:
+            iterator = zip(data,labels,center_line)
+        idx = 0
+        for it in iterator:
+            if center_line is None:
+                d,l = np.array(it[0]),np.array(it[1])
+            else:
+                d,l, cl = np.array(it[0]),np.array(it[1]),it[2]
+            unique = np.unique(l)
+            for u in unique:
+                _d = d[l==u,:]
+                if len(_d) > self.min_size:
+                    data_group.append(d[l==u,:])
+                    list_idx.append(idx)
+                    labels_group.append(u)
+                    if center_line is not None:
+                        center_lines.append(cl)
+            idx += 1
+        return data_group, labels_group, center_lines, list_idx
+            
     def visualize(self):
         self.make_buttons(self.central_line)
         self.init_canvas()
         self.paint()
+
     def paint(self):
         if self.verbose == 1:
             print('refresh') 
             
+        if self.buffers['group'] is None:
+            buffers = self.buffers['all']
+        else:
+            if self.make_labels:
+                buffers = self.buffers['group']
+            else:
+                buffers = self.buffers['all']
+
         vertices, colors, connect, \
         vertices_util, colors_util, connect_util, \
         texts, label_texts, \
         vertices_central, face_central, \
         vertices_area, colors_area, faces_area \
-        = self.make_buffer(self.buffers)
+        = self.make_buffer(buffers)
         
         self.draw(vertices, colors, connect, \
                     vertices_util, colors_util, connect_util, \
@@ -152,6 +200,7 @@ class TimeSeriesVis():
         def change_checkbox_labels(e):
             if e['name'] == 'value':
                 self.make_labels = e['new']
+
                 self.paint()
             
         def change_size_slider(e):
@@ -286,8 +335,7 @@ class TimeSeriesVis():
             if i is not None:
                 b.observe(i)
         
-        
-    def make_canvas_spec(self,data,labels=None,labels_order=None,central_line=None):
+    def make_canvas_spec(self,data,list_idx,labels=None,labels_order=None,central_line=None):
         if self.verbose == 1:
             print('make_canvas_spec')
             
@@ -305,8 +353,8 @@ class TimeSeriesVis():
         if labels is None:
             self.n_rows = math.ceil(n_charts/self.n_cols)
             data_sort = data
+            list_idx_sort = list_idx
         else:
-            
             if labels_order is None:
                 idx_ = defaultdict(list) 
                 for i,l in enumerate(labels):
@@ -323,10 +371,11 @@ class TimeSeriesVis():
                 idx = []
                 for i in range(len(labels_order)):
                     idx += idx_[i]
-            
             data_sort = []
+            list_idx_sort = []
             for i in idx:
                 data_sort.append(data[i])
+                list_idx_sort.append(list_idx[i])
                 self.meta.append({'id':str(i),'count':str(data[i].shape[0])})
             if central_line is not None:
                 central_line = [central_line[i] for i in idx]
@@ -347,7 +396,7 @@ class TimeSeriesVis():
         self.canvas_width = (chart_width + padding) * n_cols
         self.canvas_height = (chart_height + padding) * n_rows
 
-        return data_sort,labels,central_line
+        return data_sort,list_idx_sort, labels,central_line
         
     def init_canvas(self):
         if self.verbose == 1:
@@ -381,40 +430,42 @@ class TimeSeriesVis():
         
         app.run()
                 
-    def prepare_buffers(self,central_line=None):
-        data = self.data
-        self.set_widthScale(self.data)
+    def prepare_buffers(self,data,list_idx,central_line=None):
+        # data = self.data
+        scale = self.set_widthScale(data)
         if self.verbose == 1:
             print('prepare_buffer')
-        self.buffers = []
+        buffers = []
         x_limit = self.x_limit
         d_x = np.arange(self.x_limit)
         central_line_idx = 0
-        print('Preparing Buffer...')
-        for d in tqdm(data):
-            buffers = { 'vertices':None,'connect':None, 'vertices_central':None,'connect_central':None,'v_offset_central':0 }
-            # buffers['vertices'],buffers['connect'] = _make_line_buffer(d_x,d)
+        print('Preparing Buffers...')
+        for d,idx in tqdm(zip(data,list_idx),total=len(data)):
+            buffer = { 'vertices':None,'connect':None, 'vertices_central':None,'connect_central':None,'v_offset_central':0,'idx':idx }
+            # buffer['vertices'],buffer['connect'] = _make_line_buffer(d_x,d)
             h_range = [[0,x_limit],self.y_limit]
             aspect_ratio =  self.chart_height/self.chart_width
             n_bins_x = max(self.interpolate,self.x_limit)
             n_bins_y = int(aspect_ratio * n_bins_x)
-            buffers['vertices_line'], buffers['faces_line'],  buffers['alpha_line']= _make_line_density_buffer(d_x,d,h_range, n_bins_x, n_bins_y)
+            buffer['vertices_line'], buffer['faces_line'],  buffer['alpha_line']= _make_line_density_buffer(d_x,d,h_range, n_bins_x, n_bins_y)
             mv1,mf1 = _make_area_buffer(d_x,d,0.9)
             mv2,mf2 = _make_area_buffer(d_x,d,1)
             mask = ~np.all(np.isnan(d),0)
             interval = np.where(mask)[0][[0,-1]]
-            buffers['interval'] = interval
-            buffers['vertices_area'] = [mv1,mv2]
-            buffers['face_area'] = [mf1,mf2]
+            buffer['interval'] = interval
+            buffer['vertices_area'] = [mv1,mv2]
+            buffer['face_area'] = [mf1,mf2]
             if central_line is not None:
                 s = d.shape[0]
-                mesh_vertice, mesh_face = _make_line_mesh_buffer(d_x/self.x_limit,central_line[central_line_idx]/self.y_limit[1],self.scale(s))
-                buffers['vertices_central'] = mesh_vertice
-                buffers['face_central'] = mesh_face
+                mesh_vertice, mesh_face = _make_line_mesh_buffer(d_x/(self.x_limit*aspect_ratio),central_line[central_line_idx]/self.y_limit[1],scale(s))
+                mesh_vertice[:,0] *= aspect_ratio
+                buffer['vertices_central'] = mesh_vertice
+                buffer['face_central'] = mesh_face
                 central_line_idx += 1
-            buffers['size'] = d.shape[0]
-            self.buffers.append(buffers)
-            
+            buffer['size'] = d.shape[0]
+            buffers.append(buffer)
+        return buffers
+
     def make_buffer(self,buffers):
         if self.verbose == 1: 
             print('make_buffer')
@@ -562,6 +613,10 @@ class TimeSeriesVis():
             vertices_util, colors_util, connect_util, v_offset_util, texts \
             = _make_frame_buffer(vertices_util, colors_util, connect_util, v_offset_util, texts , \
                             x_offset, y_offset, width_chart, height_chart, padding_width_scaled, padding_height_scaled, x_ticks, y_ticks,self.n_ticks)
+            #chart idx
+            idx_text = 'index: {}'.format(b['idx'])
+            texts['text'].append(idx_text)
+            texts['pos'].append([x_offset + width_chart ,y_offset+height_chart + height_chart/30])
             #chart locations
             if c != n_cols:
                 x_offset += width_chart + padding_width_scaled
@@ -604,7 +659,7 @@ class TimeSeriesVis():
                 mesh_vertices.append(v)
                 mf = f + mesh_vertices_id
                 mesh_faces.append(mf)
-                mesh_vertices_id = mf[-1,-1] + 1
+                mesh_vertices_id = np.max(mf) + 1
                 mesh_vertices_color.append(np.tile(color,(v.shape[0],1)))
            
         if label_texts is not None:
@@ -632,7 +687,7 @@ class TimeSeriesVis():
                     mesh_vertices.append(v)
                     mf = f + mesh_vertices_id
                     mesh_faces.append(mf)
-                    mesh_vertices_id = mf[-1,-1] + 1
+                    mesh_vertices_id = np.max(mf) + 1
                     mesh_vertices_color.append(np.tile(c,(v.shape[0],1)))
                 # mesh_vertices_color.append(np.tile([0.9,0.9,0.9],(v.shape[0],1)))
             self.line.set_data(vertices_util,color=colors_util,connect=connect_util)
@@ -652,18 +707,19 @@ class TimeSeriesVis():
         
     def set_widthScale(self,data):
         extent = np.max([np.nanmax(d) for d in data]) - np.min([np.nanmin(d) for d in data])
-        max_height = 0.015
+        max_height = 0.05
         min_height = 0.005
         length = [len(d) for d in data]
         max_n_line = max(length) # a
         min_n_line = min(length)
         if min_n_line == max_n_line:
-            self.scale = lambda x: 0.003
+            scale = lambda x: 0.01
         else:
             a = np.array([[max_n_line,1],[min_n_line,1]])
             b = np.array([max_height,min_height])
             _x = np.linalg.solve(a, b)
-            self.scale = lambda x: _x[0]*x + _x[1]
+            scale = lambda x: _x[0]*x + _x[1]
+        return scale
 
     def clear_label_texts(self):
         self.label_texts.text = []
