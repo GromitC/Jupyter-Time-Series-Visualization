@@ -1,7 +1,7 @@
 import numpy as np
 from .util import *
 from shapely.geometry import LineString
-from .geometry import polygon2mesh, line2mesh
+from .geometry import polygon2mesh
 
 def using_clump(a):
     return np.ma.clump_unmasked(np.ma.masked_invalid(a))
@@ -15,20 +15,13 @@ def _make_line_mesh_buffer(d_x,d_y,size):
     last_index = 0
     for l in lines:
         if l.shape[0] < 2: continue
-        # line = LineString(l).buffer(size).exterior.coords.xy
-        # polygon = np.vstack((line[0],line[1])).T.tolist()
-        # line = LineString(l).parallel_offset(size/2, 'left', join_style=1).coords.xy
-        # upper_line = np.vstack((line[0],line[1])).T
-        # line = LineString(l).parallel_offset(size/2, 'right', join_style=1).coords.xy
-        # lower_line = np.vstack((line[0],line[1])).T
-        # mv, mf = polygon2mesh(upper_line,lower_line)
-        mv,mf = line2mesh(line,size)
+        line = LineString(l).buffer(size).exterior.coords.xy
+        polygon = np.vstack((line[0],line[1])).T.tolist()
+        mv, mf = polygon2mesh(polygon)
         mf += last_index
-        # mv[:,0] /= 10
         mesh_vertice.append(mv)
         mesh_face.append(mf)
-        last_index = np.max(mf) + 1
-    # print(np.concatenate(mesh_vertice).shape,np.max(mesh_face))
+        last_index = mf[-1,-1] + 1
     return np.concatenate(mesh_vertice), np.concatenate(mesh_face)
 
 def _make_line_density_buffer(_d_x,_d_y,h_range,n_bins_x,n_bins_y):
@@ -93,8 +86,8 @@ def _make_area_buffer(d_x,d_y,q=1):
     for m in masks:
         _max = np.vstack((d_x[m],y_max[m])).T
         _min = np.vstack((d_x[m][::-1],y_min[m][::-1])).T
-        # p = np.concatenate((_max,_min)).tolist()
-        mv, mf = polygon2mesh(_max,_min)
+        p = np.concatenate((_max,_min)).tolist()
+        mv, mf = polygon2mesh(p)
         if len(mf) == 0:
             continue
         mf += last_index
