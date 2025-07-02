@@ -1,4 +1,31 @@
-
+def separateData(data,labels,center_line=None):
+    data_group = []
+    labels_group = []
+    center_lines = []
+    list_idx = []
+    if center_line is None:
+        iterator = zip(data,labels)
+        center_lines = None
+    else:
+        iterator = zip(data,labels,center_line)
+    idx = 0
+    for it in iterator:
+        if center_line is None:
+            d,l = np.array(it[0]),np.array(it[1])
+        else:
+            d,l, cl = np.array(it[0]),np.array(it[1]),it[2]
+        unique = np.unique(l)
+        for u in unique:
+            _d = d[l==u,:]
+            if len(_d) > 10:
+                data_group.append(d[l==u,:])
+                list_idx.append(idx)
+                labels_group.append(u)
+            if center_line is not None:
+                center_lines.append(cl)
+        idx += 1
+    return data_group, labels_group, center_lines, list_idx
+    
 def hex2rgb(color):
     h = color.lstrip('#')
     return [int(h[i:i+2], 16)/ 255.0 for i in (0, 2, 4)]
